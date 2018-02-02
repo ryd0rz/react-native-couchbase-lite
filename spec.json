@@ -997,6 +997,9 @@
       "parameters": [
         {
           "$ref": "#/parameters/db"
+        },
+        {
+          "$ref": "#/parameters/timeout"
         }
       ],
       "get": {
