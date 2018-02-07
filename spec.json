@@ -1007,9 +1007,6 @@
       "parameters": [
         {
           "$ref": "#/parameters/db"
-        },
-        {
-          "$ref": "#/parameters/timeout"
         }
       ],
       "get": {
@@ -1034,12 +1031,6 @@
           },
           {
             "$ref": "#/parameters/filter"
-          },
-          {
-            "$ref": "#/parameters/feed"
-          },
-          {
-            "$ref": "#/parameters/heartbeat"
           }
         ],
         "summary": "Changes",
@@ -1073,6 +1064,15 @@
         "parameters": [
           {
             "$ref": "#/parameters/changes_body"
+          },
+          {
+            "$ref": "#/parameters/feed"
+          },
+          {
+            "$ref": "#/parameters/heartbeat"
+          },
+          {
+            "$ref": "#/parameters/timeout"
           }
         ],
         "summary": "Changes",
