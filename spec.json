@@ -910,6 +910,59 @@
         }
       }
     },
+    "/{db}/_close": {
+      "parameters": [
+        {
+          "$ref": "#/parameters/db"
+        }
+      ],
+      "get": {
+        "tags": [
+          "database"
+        ],
+        "summary": "Closes the open DB.",
+        "description": "This request retrieves closes the open DB.",
+        "responses": {
+          "200": {
+            "description": "200 OK"
+          },
+          "401": {
+            "description": "Unauthorized. Login required."
+          },
+          "404": {
+            "description": "Not Found. Requested database not found."
+          }
+        }
+      }
+    },
+    "/{db}/_open": {
+      "parameters": [
+        {
+          "$ref": "#/parameters/db"
+        },
+        {
+          "$ref": "#/parameters/encryption_key"
+        }
+      ],
+      "get": {
+        "tags": [
+          "database"
+        ],
+        "summary": "Opens the open DB.",
+        "description": "This request retrieves the DB and opens it.",
+        "responses": {
+          "200": {
+            "description": "200 OK"
+          },
+          "401": {
+            "description": "Unauthorized. Login required."
+          },
+          "404": {
+            "description": "Not Found. Requested database not found."
+          }
+        }
+      }
+    },
     "/{db}/_all_docs": {
       "parameters": [
         {
