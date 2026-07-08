@@ -256,7 +256,7 @@ RCT_EXPORT_METHOD(openEncryptedDatabase:(NSString *)databaseName
         options.encryptionKey = encryptionKey;
 
         NSError* error = nil;
-        CBLDatabase* db = [manager openDatabaseNamed:databaseName options:options error:&error];
+        CBLDatabase* db = [manager openDatabaseNamed:databaseName withOptions:options error:&error];
         if (!db) {
             // Existing database could not be opened with this key (e.g. encrypted
             // with a different key, or corrupt). Delete it and create a fresh one.
@@ -265,7 +265,7 @@ RCT_EXPORT_METHOD(openEncryptedDatabase:(NSString *)databaseName
             CBLDatabase* stale = [manager _databaseNamed:databaseName mustExist:NO error:nil];
             [stale deleteDatabase:nil];
             error = nil;
-            db = [manager openDatabaseNamed:databaseName options:options error:&error];
+            db = [manager openDatabaseNamed:databaseName withOptions:options error:&error];
         }
         if (!db) {
             callback(@[[NSNull null], error.localizedDescription ?: @"failed to open encrypted database"]);
