@@ -16,6 +16,13 @@
 #import <AssetsLibrary/AssetsLibrary.h>
 #import "ReactCBLiteRequestHandler.h"
 
+// Private CBLManager method used to obtain a database handle WITHOUT opening it,
+// so an existing (possibly unencrypted or stale) database can be deleted before
+// we recreate it encrypted. This is the same lookup the REST router uses.
+@interface CBLManager (ReactCBLitePrivate)
+- (CBLDatabase*) _databaseNamed:(NSString*)name mustExist:(BOOL)mustExist error:(NSError**)outError;
+@end
+
 @implementation ReactCBLite
 
 RCT_EXPORT_MODULE()
@@ -196,71 +203,87 @@ RCT_EXPORT_METHOD(upload:(NSString *)method
 
 // MARK: - Database
 
-RCT_EXPORT_METHOD(installPrebuiltDatabase:(NSString *) databaseName)
+// Returns YES if the on-disk SQLite file for the named database is UNENCRYPTED.
+// An unencrypted SQLite file begins with the ASCII bytes "SQLite format 3\0";
+// SQLCipher encrypts the header too, so an encrypted (or absent) file does not.
+- (BOOL) isDatabasePlaintext:(NSString *)databaseName manager:(CBLManager *)manager
 {
-    CBLManager* manager = [CBLManager sharedInstance];
-    CBLDatabase* db = [manager existingDatabaseNamed:databaseName error:nil];
-    if (db == nil) {
-        NSString* dbPath = [[NSBundle mainBundle] pathForResource:databaseName ofType:@"cblite2"];
-        [manager replaceDatabaseNamed:databaseName withDatabaseDir:dbPath error:nil];
+    NSString* dbFile = [NSString stringWithFormat:@"%@/%@.cblite2/db.sqlite3",
+                        manager.directory, databaseName];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:dbFile]) {
+        return NO;
     }
+    NSFileHandle* fh = [NSFileHandle fileHandleForReadingAtPath:dbFile];
+    NSData* header = [fh readDataOfLength:16];
+    [fh closeFile];
+    NSString* asAscii = [[NSString alloc] initWithData:header encoding:NSASCIIStringEncoding];
+    return (asAscii != nil && [asAscii hasPrefix:@"SQLite format 3"]);
 }
 
-// Registers an encryption key (password) for a named database so Couchbase Lite
-// encrypts it at rest (AES-256 via SQLCipher). This MUST be called before the
-// database is opened. The Couchbase Lite 1.x REST listener does not accept an
-// encryption key over HTTP, so registering it here on the shared CBLManager is
-// the only supported path: the key is stored in CBL's shared state (CBL_Shared)
-// and is picked up when the listener's background server opens the database.
-RCT_EXPORT_METHOD(registerEncryptionKey:(NSString *)encryptionKey
-                  databaseName:(NSString *)databaseName
+// The ONLY way this module opens or creates a database. Encryption is mandatory:
+//   * With no key, the call fails and NO database is created.
+//   * Any pre-existing UNENCRYPTED database (e.g. from an older build) or stale
+//     open handle is deleted first, so plaintext data is never reused.
+//   * The database is (re)created encrypted with SQLCipher (AES-256) via the
+//     public openDatabaseNamed:options: API — the only CBL path that applies the
+//     key. Because the REST listener shares this CBLManager and its database
+//     cache, the listener then reuses this already-open ENCRYPTED database instead
+//     of creating a plaintext one via its private _databaseNamed: path.
+//   * As a final guard, the on-disk file is verified encrypted; if not, it is
+//     deleted and the call fails, so plaintext is never left at rest.
+RCT_EXPORT_METHOD(openEncryptedDatabase:(NSString *)databaseName
+                  encryptionKey:(NSString *)encryptionKey
                   callback:(RCTResponseSenderBlock)callback)
 {
     @try {
-        CBLManager* dbmgr = [CBLManager sharedInstance];
-        id keyOrPassword = (encryptionKey.length > 0) ? encryptionKey : nil;
-        BOOL success = [dbmgr registerEncryptionKey:keyOrPassword forDatabaseNamed:databaseName];
-        if (success) {
-            NSLog(@"Registered encryption key for database <%@>", databaseName);
-            callback(@[databaseName, [NSNull null]]);
-        } else {
-            NSLog(@"Failed to register encryption key for database <%@>", databaseName);
-            callback(@[[NSNull null], @"Failed to register encryption key"]);
-        }
-    } @catch (NSException *e) {
-        NSLog(@"Exception registering encryption key for <%@>: %@", databaseName, e);
-        callback(@[[NSNull null], e.reason]);
-    }
-}
-
-// Diagnostic: inspects the on-disk SQLite file for a database and reports whether
-// it is encrypted at rest. An unencrypted SQLite file begins with the ASCII bytes
-// "SQLite format 3\0"; a SQLCipher-encrypted file encrypts the header too, so those
-// bytes look random. Logs the verdict to the device console (searchable for
-// "[ENCRYPTION CHECK]") and returns YES to JS if the database appears encrypted.
-RCT_EXPORT_METHOD(checkDatabaseEncryption:(NSString *)databaseName
-                  callback:(RCTResponseSenderBlock)callback)
-{
-    @try {
-        CBLManager* dbmgr = [CBLManager sharedInstance];
-        NSString* dbFile = [NSString stringWithFormat:@"%@/%@.cblite2/db.sqlite3",
-                            dbmgr.directory, databaseName];
-        if (![[NSFileManager defaultManager] fileExistsAtPath:dbFile]) {
-            NSLog(@"[ENCRYPTION CHECK] db=<%@> file not found at %@", databaseName, dbFile);
-            callback(@[[NSNull null], @"database file not found"]);
+        if (encryptionKey.length == 0) {
+            NSLog(@"[ENCRYPTION] refusing <%@>: encryption key required", databaseName);
+            callback(@[[NSNull null], @"encryption key required"]);
             return;
         }
-        NSFileHandle* fh = [NSFileHandle fileHandleForReadingAtPath:dbFile];
-        NSData* header = [fh readDataOfLength:16];
-        [fh closeFile];
-        NSString* asAscii = [[NSString alloc] initWithData:header encoding:NSASCIIStringEncoding];
-        BOOL plaintext = (asAscii != nil && [asAscii hasPrefix:@"SQLite format 3"]);
-        NSLog(@"[ENCRYPTION CHECK] db=<%@> path=%@ firstBytes=%@ => %@",
-              databaseName, dbFile, header,
-              plaintext ? @"PLAINTEXT (NOT ENCRYPTED)" : @"ENCRYPTED (no SQLite header)");
-        callback(@[@(!plaintext), [NSNull null]]);
+        CBLManager* manager = [CBLManager sharedInstance];
+
+        // Remove any existing unencrypted database (and close a stale open handle
+        // the REST listener may have cached) so we never reuse plaintext data.
+        if ([self isDatabasePlaintext:databaseName manager:manager]) {
+            NSLog(@"[ENCRYPTION] deleting existing UNENCRYPTED database <%@>", databaseName);
+            CBLDatabase* stale = [manager _databaseNamed:databaseName mustExist:NO error:nil];
+            [stale deleteDatabase:nil];
+        }
+
+        CBLDatabaseOptions* options = [[CBLDatabaseOptions alloc] init];
+        options.create = YES;
+        options.encryptionKey = encryptionKey;
+
+        NSError* error = nil;
+        CBLDatabase* db = [manager openDatabaseNamed:databaseName options:options error:&error];
+        if (!db) {
+            // Existing database could not be opened with this key (e.g. encrypted
+            // with a different key, or corrupt). Delete it and create a fresh one.
+            NSLog(@"[ENCRYPTION] open failed for <%@> (%@); deleting and recreating",
+                  databaseName, error.localizedDescription);
+            CBLDatabase* stale = [manager _databaseNamed:databaseName mustExist:NO error:nil];
+            [stale deleteDatabase:nil];
+            error = nil;
+            db = [manager openDatabaseNamed:databaseName options:options error:&error];
+        }
+        if (!db) {
+            callback(@[[NSNull null], error.localizedDescription ?: @"failed to open encrypted database"]);
+            return;
+        }
+
+        // Final guard: never leave plaintext at rest.
+        if ([self isDatabasePlaintext:databaseName manager:manager]) {
+            NSLog(@"[ENCRYPTION] <%@> NOT encrypted after open; deleting", databaseName);
+            [db deleteDatabase:nil];
+            callback(@[[NSNull null], @"database is not encrypted"]);
+            return;
+        }
+
+        NSLog(@"[ENCRYPTION] database <%@> is encrypted at rest", databaseName);
+        callback(@[@YES, [NSNull null]]);
     } @catch (NSException *e) {
-        NSLog(@"[ENCRYPTION CHECK] error for <%@>: %@", databaseName, e);
+        NSLog(@"[ENCRYPTION] exception opening <%@>: %@", databaseName, e);
         callback(@[[NSNull null], e.reason]);
     }
 }
