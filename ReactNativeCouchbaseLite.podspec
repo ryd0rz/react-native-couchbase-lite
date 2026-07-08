@@ -18,6 +18,9 @@ Pod::Spec.new do |s|
   s.homepage     = "https://github.com/fraserxu/react-native-couchbase-lite.git"
   s.source       = { :git => 'https://github.com/fraserxu/react-native-couchbase-lite.git' }
   s.source_files = 'ios/**/*.{h,m}'
-  s.dependency 'couchbase-lite-ios'
-  s.dependency 'couchbase-lite-ios/Listener'
+  # Use the SQLCipher storage subspec (NOT the default 'SQLite' subspec, which
+  # links plain system sqlite3 and silently ignores encryption keys). SQLCipher
+  # is required for encryption at rest (AES-256) and vendors both the
+  # CouchbaseLite and CouchbaseLiteListener frameworks at 1.4.4.
+  s.dependency 'couchbase-lite-ios/SQLCipher'
 end
