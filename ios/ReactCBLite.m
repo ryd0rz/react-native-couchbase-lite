@@ -206,4 +206,31 @@ RCT_EXPORT_METHOD(installPrebuiltDatabase:(NSString *) databaseName)
     }
 }
 
+// Registers an encryption key (password) for a named database so Couchbase Lite
+// encrypts it at rest (AES-256 via SQLCipher). This MUST be called before the
+// database is opened. The Couchbase Lite 1.x REST listener does not accept an
+// encryption key over HTTP, so registering it here on the shared CBLManager is
+// the only supported path: the key is stored in CBL's shared state (CBL_Shared)
+// and is picked up when the listener's background server opens the database.
+RCT_EXPORT_METHOD(registerEncryptionKey:(NSString *)encryptionKey
+                  databaseName:(NSString *)databaseName
+                  callback:(RCTResponseSenderBlock)callback)
+{
+    @try {
+        CBLManager* dbmgr = [CBLManager sharedInstance];
+        id keyOrPassword = (encryptionKey.length > 0) ? encryptionKey : nil;
+        BOOL success = [dbmgr registerEncryptionKey:keyOrPassword forDatabaseNamed:databaseName];
+        if (success) {
+            NSLog(@"Registered encryption key for database <%@>", databaseName);
+            callback(@[databaseName, [NSNull null]]);
+        } else {
+            NSLog(@"Failed to register encryption key for database <%@>", databaseName);
+            callback(@[[NSNull null], @"Failed to register encryption key"]);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"Exception registering encryption key for <%@>: %@", databaseName, e);
+        callback(@[[NSNull null], e.reason]);
+    }
+}
+
 @end
