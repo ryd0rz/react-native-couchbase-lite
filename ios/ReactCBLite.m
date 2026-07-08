@@ -233,4 +233,36 @@ RCT_EXPORT_METHOD(registerEncryptionKey:(NSString *)encryptionKey
     }
 }
 
+// Diagnostic: inspects the on-disk SQLite file for a database and reports whether
+// it is encrypted at rest. An unencrypted SQLite file begins with the ASCII bytes
+// "SQLite format 3\0"; a SQLCipher-encrypted file encrypts the header too, so those
+// bytes look random. Logs the verdict to the device console (searchable for
+// "[ENCRYPTION CHECK]") and returns YES to JS if the database appears encrypted.
+RCT_EXPORT_METHOD(checkDatabaseEncryption:(NSString *)databaseName
+                  callback:(RCTResponseSenderBlock)callback)
+{
+    @try {
+        CBLManager* dbmgr = [CBLManager sharedInstance];
+        NSString* dbFile = [NSString stringWithFormat:@"%@/%@.cblite2/db.sqlite3",
+                            dbmgr.directory, databaseName];
+        if (![[NSFileManager defaultManager] fileExistsAtPath:dbFile]) {
+            NSLog(@"[ENCRYPTION CHECK] db=<%@> file not found at %@", databaseName, dbFile);
+            callback(@[[NSNull null], @"database file not found"]);
+            return;
+        }
+        NSFileHandle* fh = [NSFileHandle fileHandleForReadingAtPath:dbFile];
+        NSData* header = [fh readDataOfLength:16];
+        [fh closeFile];
+        NSString* asAscii = [[NSString alloc] initWithData:header encoding:NSASCIIStringEncoding];
+        BOOL plaintext = (asAscii != nil && [asAscii hasPrefix:@"SQLite format 3"]);
+        NSLog(@"[ENCRYPTION CHECK] db=<%@> path=%@ firstBytes=%@ => %@",
+              databaseName, dbFile, header,
+              plaintext ? @"PLAINTEXT (NOT ENCRYPTED)" : @"ENCRYPTED (no SQLite header)");
+        callback(@[@(!plaintext), [NSNull null]]);
+    } @catch (NSException *e) {
+        NSLog(@"[ENCRYPTION CHECK] error for <%@>: %@", databaseName, e);
+        callback(@[[NSNull null], e.reason]);
+    }
+}
+
 @end
